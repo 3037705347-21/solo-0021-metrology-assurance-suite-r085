@@ -24,17 +24,13 @@ func NewService(repo *repository.Repository) *Service {
 }
 
 func labMatches(requested, owned string) bool {
-	requested = domain.NormalizeLab(requested)
-	return requested == "" || requested == domain.NormalizeLab(owned)
+	return domain.ResolveLab(requested) == domain.NormalizeLab(owned)
 }
 
 func (s *Service) RegisterDevice(ctx context.Context, input contracts.RegisterDeviceRequest) (domain.Device, error) {
 	var created domain.Device
 	tag := domain.NormalizeAssetTag(input.AssetTag)
-	lab := domain.NormalizeLab(input.Lab)
-	if lab == "" {
-		lab = domain.DefaultLab
-	}
+	lab := domain.ResolveLab(input.Lab)
 	err := s.repository.Mutate(ctx, func(m *repository.Mutation) error {
 		if _, exists := m.DeviceByTag(tag); exists {
 			return fmt.Errorf("%w: %s", domain.ErrDuplicateAssetTag, tag)
@@ -74,11 +70,14 @@ func (s *Service) RegisterDevice(ctx context.Context, input contracts.RegisterDe
 	return created, err
 }
 
-func (s *Service) Device(ctx context.Context, id string) (domain.Device, error) {
+func (s *Service) Device(ctx context.Context, id, lab string) (domain.Device, error) {
 	var found domain.Device
 	err := s.repository.Read(ctx, func(snapshot repository.Snapshot) error {
 		item, exists := snapshot.Device(strings.TrimSpace(id))
 		if !exists {
+			return fmt.Errorf("%w: device %s", domain.ErrNotFound, id)
+		}
+		if !item.OwnedBy(lab) {
 			return fmt.Errorf("%w: device %s", domain.ErrNotFound, id)
 		}
 		found = item
@@ -139,11 +138,14 @@ func (s *Service) OpenCase(ctx context.Context, input contracts.OpenCaseRequest)
 	return result, err
 }
 
-func (s *Service) Case(ctx context.Context, id string) (contracts.CaseResponse, error) {
+func (s *Service) Case(ctx context.Context, id, lab string) (contracts.CaseResponse, error) {
 	var result contracts.CaseResponse
 	err := s.repository.Read(ctx, func(snapshot repository.Snapshot) error {
 		item, exists := snapshot.Case(strings.TrimSpace(id))
 		if !exists {
+			return fmt.Errorf("%w: case %s", domain.ErrNotFound, id)
+		}
+		if !item.OwnedBy(lab) {
 			return fmt.Errorf("%w: case %s", domain.ErrNotFound, id)
 		}
 		result = caseResponseFromSnapshot(snapshot, item)
@@ -154,30 +156,6 @@ func (s *Service) Case(ctx context.Context, id string) (contracts.CaseResponse, 
 
 func (s *Service) RecordMeasurement(ctx context.Context, caseID string, input contracts.RecordMeasurementRequest) (contracts.CaseResponse, error) {
 	var result contracts.CaseResponse
-	trimmed := strings.TrimSpace(caseID)
-	if err := s.repository.Mutate(ctx, func(m *repository.Mutation) error {
-		item, exists := m.Case(trimmed)
-		if !exists {
-			return nil
-		}
-		event, err := domain.NewAuditEvent(
-			m.NextID("event"),
-			"case",
-			item.ID,
-			item.ID,
-			"measurement_requested",
-			strings.TrimSpace(input.Technician),
-			"measurement request received",
-			s.now(),
-		)
-		if err != nil {
-			return err
-		}
-		m.AppendEvent(event)
-		return nil
-	}); err != nil {
-		return result, err
-	}
 	err := s.repository.Mutate(ctx, func(m *repository.Mutation) error {
 		id := strings.TrimSpace(caseID)
 		item, exists := m.Case(id)
@@ -213,6 +191,20 @@ func (s *Service) RecordMeasurement(ctx context.Context, caseID string, input co
 		if err := m.UpdateCase(item); err != nil {
 			return err
 		}
+		requestEvent, err := domain.NewAuditEvent(
+			m.NextID("event"),
+			"case",
+			item.ID,
+			item.ID,
+			"measurement_requested",
+			measurement.Technician,
+			"measurement request received",
+			s.now(),
+		)
+		if err != nil {
+			return err
+		}
+		m.AppendEvent(requestEvent)
 		kind := "measurement_rejected"
 		detail := "measurement exceeded tolerance and requires another measurement"
 		if measurement.Accepted {
@@ -381,13 +373,14 @@ func (s *Service) TransferDevice(ctx context.Context, deviceID string, input con
 		if err := m.UpdateDevice(device); err != nil {
 			return err
 		}
+		actor := domain.ResolveLab(input.Lab)
 		event, err := domain.NewAuditEvent(
 			m.NextID("event"),
 			"device",
 			device.ID,
 			"",
 			"device_transferred",
-			strings.TrimSpace(input.Lab),
+			actor,
 			"device transferred to "+device.Lab,
 			s.now(),
 		)
@@ -395,6 +388,32 @@ func (s *Service) TransferDevice(ctx context.Context, deviceID string, input con
 			return err
 		}
 		m.AppendEvent(event)
+		// An unfinished case is ongoing business, not history: it moves with
+		// the device so the receiving laboratory can continue the work.
+		// Sealed cases, recorded measurements, and seals keep their original
+		// laboratory.
+		if active, exists := m.ActiveCaseForDevice(device.ID); exists {
+			active.Lab = device.Lab
+			active.Version++
+			active.UpdatedAt = s.now()
+			if err := m.UpdateCase(active); err != nil {
+				return err
+			}
+			caseEvent, err := domain.NewAuditEvent(
+				m.NextID("event"),
+				"case",
+				active.ID,
+				active.ID,
+				"case_transferred",
+				actor,
+				"unfinished case moved to "+device.Lab+" with the device",
+				s.now(),
+			)
+			if err != nil {
+				return err
+			}
+			m.AppendEvent(caseEvent)
+		}
 		updated = device
 		return nil
 	})

@@ -67,6 +67,21 @@ seal, moves the case to `sealed`, and rejects later mutations.
 
 ## State And Rules
 
+Laboratory scoping:
+
+- Every device, case, measurement, and evidence seal belongs to exactly one
+  laboratory. Requests name their laboratory in the `lab` field, or in the
+  `lab` query parameter for GET routes.
+- A request whose laboratory does not own the resource receives `not_found`
+  and cannot read or change any data; rejected requests append no audit
+  events and store no partial records.
+- Requests that omit the laboratory are scoped to `lab-default`; an empty
+  laboratory never acts as a wildcard.
+- `POST /devices/{id}/transfer` moves an active device to another
+  laboratory. An unfinished case moves with the device so the receiving
+  laboratory can continue the work. Sealed cases, recorded measurements, and
+  evidence seals are immutable history and keep their original laboratory.
+
 Device state:
 
 - `active -> retired`
@@ -107,6 +122,7 @@ Required invariants:
 - `GET /healthz`
 - `POST /devices`
 - `GET /devices/{id}`
+- `POST /devices/{id}/transfer`
 - `POST /cases`
 - `GET /cases/{id}`
 - `POST /cases/{id}/measurements`

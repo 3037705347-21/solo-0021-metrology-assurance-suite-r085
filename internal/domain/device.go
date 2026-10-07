@@ -54,6 +54,17 @@ func NormalizeLab(value string) string {
 	return strings.TrimSpace(value)
 }
 
+// ResolveLab scopes a request to a laboratory. Requests that do not name a
+// laboratory predate the scoping work and fall back to DefaultLab; an empty
+// value never acts as a wildcard.
+func ResolveLab(value string) string {
+	resolved := NormalizeLab(value)
+	if resolved == "" {
+		return DefaultLab
+	}
+	return resolved
+}
+
 func (d Device) Validate() error {
 	if d.ID == "" || d.AssetTag == "" || d.Model == "" || d.Room == "" || d.Lab == "" || d.Steward == "" {
 		return fmt.Errorf("%w: device id, asset tag, model, room, laboratory, and steward are required", ErrInvalidInput)
@@ -77,8 +88,7 @@ func (d Device) IsActive() bool {
 }
 
 func (d Device) OwnedBy(lab string) bool {
-	requested := NormalizeLab(lab)
-	return requested == "" || requested == d.Lab
+	return ResolveLab(lab) == d.Lab
 }
 
 func (d *Device) TransferTo(lab string) error {

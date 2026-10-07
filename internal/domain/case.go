@@ -72,8 +72,7 @@ func (c VerificationCase) IsUnfinished() bool {
 }
 
 func (c VerificationCase) OwnedBy(lab string) bool {
-	requested := NormalizeLab(lab)
-	return requested == "" || requested == NormalizeLab(c.Lab)
+	return ResolveLab(lab) == NormalizeLab(c.Lab)
 }
 
 func (c *VerificationCase) RecordMeasurement(accepted bool, at time.Time) error {

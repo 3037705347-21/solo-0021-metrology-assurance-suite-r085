@@ -36,12 +36,20 @@ or extend these smoke checks with red/green verification tests.
 - `GET /healthz`
 - `POST /devices`
 - `GET /devices/{id}`
+- `POST /devices/{id}/transfer`
 - `POST /cases`
 - `GET /cases/{id}`
 - `POST /cases/{id}/measurements`
 - `POST /cases/{id}/reopen`
 - `POST /cases/{id}/seal`
 - `GET /cases/{id}/events`
+
+Every resource belongs to exactly one laboratory. Mutating requests name
+their laboratory in the `lab` JSON field; the GET routes take a `lab` query
+parameter. Requests from another laboratory receive `not_found` and leave no
+trace. Requests that omit `lab` are scoped to `lab-default`. Transferring a
+device moves its unfinished case to the new laboratory; sealed cases,
+measurements, and seals keep the laboratory they were created in.
 
 ## Layout
 
