@@ -25,7 +25,7 @@ func (s *Server) registerDevice(writer http.ResponseWriter, request *http.Reques
 }
 
 func (s *Server) device(writer http.ResponseWriter, request *http.Request) {
-	device, err := s.service.Device(request.Context(), request.PathValue("id"))
+	device, err := s.service.Device(request.Context(), request.PathValue("id"), request.URL.Query().Get("lab"))
 	if err != nil {
 		writeError(writer, err)
 		return
@@ -62,7 +62,7 @@ func (s *Server) openCase(writer http.ResponseWriter, request *http.Request) {
 }
 
 func (s *Server) caseView(writer http.ResponseWriter, request *http.Request) {
-	view, err := s.service.Case(request.Context(), request.PathValue("id"))
+	view, err := s.service.Case(request.Context(), request.PathValue("id"), request.URL.Query().Get("lab"))
 	if err != nil {
 		writeError(writer, err)
 		return
@@ -113,7 +113,7 @@ func (s *Server) sealCase(writer http.ResponseWriter, request *http.Request) {
 }
 
 func (s *Server) events(writer http.ResponseWriter, request *http.Request) {
-	view, err := s.service.Case(request.Context(), request.PathValue("id"))
+	view, err := s.service.Case(request.Context(), request.PathValue("id"), request.URL.Query().Get("lab"))
 	if err != nil {
 		writeError(writer, err)
 		return

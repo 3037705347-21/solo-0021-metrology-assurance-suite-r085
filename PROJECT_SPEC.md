@@ -12,6 +12,24 @@ The service is intentionally self-contained. It uses an in-memory repository
 with atomic copy-on-write mutations and does not require a database or an
 external service.
 
+## Laboratory Ownership
+
+The service is shared by independent laboratories. Every device, case,
+measurement, evidence seal, and audit event belongs to exactly one laboratory.
+
+- Write requests identify their laboratory with a `lab` field; read requests
+  identify it with a `?lab=` query parameter. A request that omits the
+  laboratory acts as `lab-default` (there is no cross-laboratory wildcard).
+- Resources owned by another laboratory are neither readable nor mutable: the
+  service reports them as `not_found` and appends no audit event and no partial
+  record for the rejected request.
+- A device is formally transferred with
+  `POST /devices/{id}/transfer` (`lab`, `target_lab`). The device and its one
+  unfinished case move to the receiving laboratory, so new business runs under
+  the new ownership. Sealed cases, their measurements and seals, and all
+  earlier audit events are historical facts and keep their original laboratory.
+
+
 ## Users
 
 - Laboratory steward: registers devices and opens verification cases.
@@ -82,12 +100,19 @@ VerificationCase state:
 
 Required invariants:
 
+- Every resource belongs to exactly one laboratory and is invisible to every
+  other laboratory.
+- A rejected request never appends an audit event, measurement, or other
+  partial record; the case mutation and its audit event share one atomic
+  commit.
 - Asset tags are unique after case-insensitive normalization.
 - A device has at most one unfinished verification case.
 - Measurements are accepted only while a case is awaiting measurement.
 - A tolerance must be positive.
 - A case can have at most one evidence seal.
 - A sealed case cannot accept measurements, reopen, or seal again.
+- Transferring a device moves its unfinished case to the new laboratory;
+  sealed cases and all historical records keep their original laboratory.
 - Every mutation that changes a case also appends an audit event in the same
   repository commit.
 
@@ -106,13 +131,14 @@ Required invariants:
 
 - `GET /healthz`
 - `POST /devices`
-- `GET /devices/{id}`
+- `GET /devices/{id}?lab=`
+- `POST /devices/{id}/transfer`
 - `POST /cases`
-- `GET /cases/{id}`
+- `GET /cases/{id}?lab=`
 - `POST /cases/{id}/measurements`
 - `POST /cases/{id}/reopen`
 - `POST /cases/{id}/seal`
-- `GET /cases/{id}/events`
+- `GET /cases/{id}/events?lab=`
 
 ## Validation Plan
 
@@ -121,7 +147,9 @@ bounded production smoke command under `cmd/workflowcheck`. The command starts
 an HTTP test server in the same process, calls the public routes, and verifies
 both success and failure behavior. The seal check also races two concurrent
 seal requests to prove that the repository mutation lock permits exactly one
-seal.
+seal. The laboratory-isolation check verifies that foreign laboratories receive
+`not_found` without leaving a phantom event, and that a transfer moves the
+unfinished case while sealed history keeps its original laboratory.
 
 Tests are intentionally deferred for this initialization baseline. The later
 engineering-task stage will add unit and integration tests, including red/green

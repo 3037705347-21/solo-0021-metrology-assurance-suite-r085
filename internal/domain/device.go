@@ -77,8 +77,7 @@ func (d Device) IsActive() bool {
 }
 
 func (d Device) OwnedBy(lab string) bool {
-	requested := NormalizeLab(lab)
-	return requested == "" || requested == d.Lab
+	return NormalizeLab(lab) == d.Lab
 }
 
 func (d *Device) TransferTo(lab string) error {

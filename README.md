@@ -22,6 +22,7 @@ go run ./cmd/workflowcheck --workflow open-verification-case
 go run ./cmd/workflowcheck --workflow record-measurement
 go run ./cmd/workflowcheck --workflow reopen-verification-case
 go run ./cmd/workflowcheck --workflow seal-verification
+go run ./cmd/workflowcheck --workflow laboratory-isolation
 ```
 
 The workflow runner starts a fresh in-process HTTP service and exercises the
@@ -31,17 +32,32 @@ Tests are intentionally deferred for this initialization baseline. The later
 engineering-task stage will add the unit and integration test suite and replace
 or extend these smoke checks with red/green verification tests.
 
+## Laboratory scoping
+
+The service is shared by independent laboratories. Every device, case,
+measurement, seal, and audit event belongs to exactly one laboratory. Write
+requests carry a `lab` field and read requests carry a `?lab=` query parameter;
+omitting the laboratory means `lab-default`. Resources owned by another
+laboratory return `not_found` on every read and write, and a rejected request
+leaves no audit event or partial record.
+
+`POST /devices/{id}/transfer` formally hands a device to another laboratory:
+the device and its unfinished case move together, so new measurements,
+reopens, and seals run under the receiving laboratory. Sealed cases and the
+history already recorded stay with the original laboratory.
+
 ## API
 
 - `GET /healthz`
 - `POST /devices`
-- `GET /devices/{id}`
+- `GET /devices/{id}?lab=`
+- `POST /devices/{id}/transfer`
 - `POST /cases`
-- `GET /cases/{id}`
+- `GET /cases/{id}?lab=`
 - `POST /cases/{id}/measurements`
 - `POST /cases/{id}/reopen`
 - `POST /cases/{id}/seal`
-- `GET /cases/{id}/events`
+- `GET /cases/{id}/events?lab=`
 
 ## Layout
 

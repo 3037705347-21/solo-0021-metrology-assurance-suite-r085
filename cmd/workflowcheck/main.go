@@ -40,6 +40,7 @@ func main() {
 		"record-measurement":       checkRecordMeasurement,
 		"reopen-verification-case": checkReopenVerificationCase,
 		"seal-verification":        checkSealVerification,
+		"laboratory-isolation":     checkLaboratoryIsolation,
 	}
 	run, ok := checks[*workflow]
 	if !ok {
@@ -375,6 +376,264 @@ func checkSealVerification() error {
 	return nil
 }
 
+func checkLaboratoryIsolation() error {
+	h := newHarness()
+	defer h.close()
+
+	const lab1 = "lab-one"
+	const lab2 = "lab-two"
+
+	// Lab one registers a device and opens an in-progress case.
+	deviceID, err := h.createDeviceLab("MET-2001", lab1)
+	if err != nil {
+		return err
+	}
+	opened, err := h.openCaseLab(deviceID, lab1)
+	if err != nil {
+		return err
+	}
+	caseID, err := nestedString(opened.Body, "case", "id")
+	if err != nil {
+		return err
+	}
+
+	// 1. A foreign laboratory must not see the device or the case.
+	foreignDevice, err := h.request(http.MethodGet, "/devices/"+deviceID+"?lab="+lab2, nil)
+	if err != nil {
+		return err
+	}
+	if err := expectStatus(foreignDevice, http.StatusNotFound); err != nil {
+		return err
+	}
+	foreignCase, err := h.request(http.MethodGet, "/cases/"+caseID+"?lab="+lab2, nil)
+	if err != nil {
+		return err
+	}
+	if err := expectStatus(foreignCase, http.StatusNotFound); err != nil {
+		return err
+	}
+	foreignEvents, err := h.request(http.MethodGet, "/cases/"+caseID+"/events?lab="+lab2, nil)
+	if err != nil {
+		return err
+	}
+	if err := expectStatus(foreignEvents, http.StatusNotFound); err != nil {
+		return err
+	}
+
+	// 2. A foreign laboratory cannot attach a measurement. The rejection must
+	// leave no audit event and no measurement behind.
+	intrusion, err := h.recordMeasurementLab(caseID, 25.2, "Outsider", lab2)
+	if err != nil {
+		return err
+	}
+	if err := expectStatus(intrusion, http.StatusNotFound); err != nil {
+		return err
+	}
+	ownerView, err := h.request(http.MethodGet, "/cases/"+caseID+"?lab="+lab1, nil)
+	if err != nil {
+		return err
+	}
+	if err := expectStatus(ownerView, http.StatusOK); err != nil {
+		return err
+	}
+	measurements, err := nestedSlice(ownerView.Body, "measurements")
+	if err != nil {
+		return err
+	}
+	if len(measurements) != 0 {
+		return fmt.Errorf("rejected foreign measurement left %d measurement(s)", len(measurements))
+	}
+	events, err := nestedSlice(ownerView.Body, "events")
+	if err != nil {
+		return err
+	}
+	for _, raw := range events {
+		event, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if event["kind"] == "measurement_requested" {
+			return errors.New("rejected foreign measurement left a phantom audit event")
+		}
+	}
+
+	// Reopen and seal must be denied to a foreign laboratory as well.
+	foreignReopen, err := h.request(http.MethodPost, "/cases/"+caseID+"/reopen", map[string]any{
+		"actor":  "Outsider",
+		"reason": "trying to take over",
+		"lab":    lab2,
+	})
+	if err != nil {
+		return err
+	}
+	if err := expectStatus(foreignReopen, http.StatusNotFound); err != nil {
+		return err
+	}
+	foreignSeal, err := h.request(http.MethodPost, "/cases/"+caseID+"/seal", map[string]any{
+		"reviewer": "Outsider",
+		"summary":  "trying to seal",
+		"lab":      lab2,
+	})
+	if err != nil {
+		return err
+	}
+	if err := expectStatus(foreignSeal, http.StatusNotFound); err != nil {
+		return err
+	}
+
+	// 3. Lab one formally transfers the device to lab two. The open case must
+	// move with the device; the original lab loses access to both.
+	transfer, err := h.request(http.MethodPost, "/devices/"+deviceID+"/transfer", map[string]any{
+		"lab":        lab1,
+		"target_lab": lab2,
+	})
+	if err != nil {
+		return err
+	}
+	if err := expectStatus(transfer, http.StatusOK); err != nil {
+		return err
+	}
+	owner, err := nestedString(transfer.Body, "device", "lab")
+	if err != nil {
+		return err
+	}
+	if owner != lab2 {
+		return fmt.Errorf("device lab after transfer = %q, expected %q", owner, lab2)
+	}
+	oldLabDevice, err := h.request(http.MethodGet, "/devices/"+deviceID+"?lab="+lab1, nil)
+	if err != nil {
+		return err
+	}
+	if err := expectStatus(oldLabDevice, http.StatusNotFound); err != nil {
+		return err
+	}
+	movedView, err := h.request(http.MethodGet, "/cases/"+caseID+"?lab="+lab2, nil)
+	if err != nil {
+		return err
+	}
+	if err := expectStatus(movedView, http.StatusOK); err != nil {
+		return err
+	}
+	movedLab, err := nestedString(movedView.Body, "case", "lab")
+	if err != nil {
+		return err
+	}
+	if movedLab != lab2 {
+		return fmt.Errorf("open case lab after transfer = %q, expected %q", movedLab, lab2)
+	}
+	oldLabCase, err := h.request(http.MethodGet, "/cases/"+caseID+"?lab="+lab1, nil)
+	if err != nil {
+		return err
+	}
+	if err := expectStatus(oldLabCase, http.StatusNotFound); err != nil {
+		return err
+	}
+
+	// 4. New business on the transferred case runs under lab two.
+	recorded, err := h.recordMeasurementLab(caseID, 25.2, "New Tech", lab2)
+	if err != nil {
+		return err
+	}
+	if err := expectStatus(recorded, http.StatusCreated); err != nil {
+		return err
+	}
+	state, err := nestedString(recorded.Body, "case", "state")
+	if err != nil {
+		return err
+	}
+	if state != "review_ready" {
+		return fmt.Errorf("measurement after transfer state = %q", state)
+	}
+	sealed, err := h.request(http.MethodPost, "/cases/"+caseID+"/seal", map[string]any{
+		"reviewer": "New Reviewer",
+		"summary":  "sealed after transfer",
+		"lab":      lab2,
+	})
+	if err != nil {
+		return err
+	}
+	if err := expectStatus(sealed, http.StatusCreated); err != nil {
+		return err
+	}
+	sealLab, err := nestedString(sealed.Body, "seal", "lab")
+	if err != nil {
+		return err
+	}
+	if sealLab != lab2 {
+		return fmt.Errorf("seal lab = %q, expected %q", sealLab, lab2)
+	}
+
+	// 5. Historical facts keep their original laboratory: the device is now
+	// lab two, but a sealed case produced in the original lab stays there.
+	historyDeviceID, err := h.createDeviceLab("MET-2002", lab1)
+	if err != nil {
+		return err
+	}
+	historyOpened, err := h.openCaseLab(historyDeviceID, lab1)
+	if err != nil {
+		return err
+	}
+	historyCaseID, err := nestedString(historyOpened.Body, "case", "id")
+	if err != nil {
+		return err
+	}
+	historyRecorded, err := h.recordMeasurementLab(historyCaseID, 25.1, "Old Tech", lab1)
+	if err != nil {
+		return err
+	}
+	if err := expectStatus(historyRecorded, http.StatusCreated); err != nil {
+		return err
+	}
+	historySealed, err := h.request(http.MethodPost, "/cases/"+historyCaseID+"/seal", map[string]any{
+		"reviewer": "Old Reviewer",
+		"summary":  "sealed before transfer",
+		"lab":      lab1,
+	})
+	if err != nil {
+		return err
+	}
+	if err := expectStatus(historySealed, http.StatusCreated); err != nil {
+		return err
+	}
+	if _, err := h.request(http.MethodPost, "/devices/"+historyDeviceID+"/transfer", map[string]any{
+		"lab":        lab1,
+		"target_lab": lab2,
+	}); err != nil {
+		return err
+	}
+	// Device moved to lab two, but the sealed history remains readable by and
+	// owned by lab one.
+	stayedView, err := h.request(http.MethodGet, "/cases/"+historyCaseID+"?lab="+lab1, nil)
+	if err != nil {
+		return err
+	}
+	if err := expectStatus(stayedView, http.StatusOK); err != nil {
+		return err
+	}
+	stayedLab, err := nestedString(stayedView.Body, "case", "lab")
+	if err != nil {
+		return err
+	}
+	if stayedLab != lab1 {
+		return fmt.Errorf("sealed historical case lab = %q, expected %q", stayedLab, lab1)
+	}
+	stayedSealLab, err := nestedString(stayedView.Body, "seal", "lab")
+	if err != nil {
+		return err
+	}
+	if stayedSealLab != lab1 {
+		return fmt.Errorf("historical seal lab = %q, expected %q", stayedSealLab, lab1)
+	}
+	movedAwayCase, err := h.request(http.MethodGet, "/cases/"+historyCaseID+"?lab="+lab2, nil)
+	if err != nil {
+		return err
+	}
+	if err := expectStatus(movedAwayCase, http.StatusNotFound); err != nil {
+		return err
+	}
+	return nil
+}
+
 func newHarness() *harness {
 	server := httptest.NewServer(bootstrap.NewHandler())
 	return &harness{
@@ -425,12 +684,20 @@ func (h *harness) request(method, path string, body any) (apiResponse, error) {
 }
 
 func (h *harness) createDevice(tag string) (string, error) {
-	response, err := h.request(http.MethodPost, "/devices", map[string]any{
+	return h.createDeviceLab(tag, "")
+}
+
+func (h *harness) createDeviceLab(tag, lab string) (string, error) {
+	body := map[string]any{
 		"asset_tag": tag,
 		"model":     "Bench Meter",
 		"room":      "Room A",
 		"steward":   "Lin",
-	})
+	}
+	if lab != "" {
+		body["lab"] = lab
+	}
+	response, err := h.request(http.MethodPost, "/devices", body)
 	if err != nil {
 		return "", err
 	}
@@ -441,12 +708,20 @@ func (h *harness) createDevice(tag string) (string, error) {
 }
 
 func (h *harness) openCase(deviceID string) (apiResponse, error) {
-	response, err := h.request(http.MethodPost, "/cases", map[string]any{
+	return h.openCaseLab(deviceID, "")
+}
+
+func (h *harness) openCaseLab(deviceID, lab string) (apiResponse, error) {
+	body := map[string]any{
 		"device_id": deviceID,
 		"nominal":   25.0,
 		"tolerance": 0.5,
 		"steward":   "Qiao",
-	})
+	}
+	if lab != "" {
+		body["lab"] = lab
+	}
+	response, err := h.request(http.MethodPost, "/cases", body)
 	if err != nil {
 		return apiResponse{}, err
 	}
@@ -457,10 +732,18 @@ func (h *harness) openCase(deviceID string) (apiResponse, error) {
 }
 
 func (h *harness) recordMeasurement(caseID string, observed float64, technician string) (apiResponse, error) {
-	return h.request(http.MethodPost, "/cases/"+caseID+"/measurements", map[string]any{
+	return h.recordMeasurementLab(caseID, observed, technician, "")
+}
+
+func (h *harness) recordMeasurementLab(caseID string, observed float64, technician, lab string) (apiResponse, error) {
+	body := map[string]any{
 		"observed":   observed,
 		"technician": technician,
-	})
+	}
+	if lab != "" {
+		body["lab"] = lab
+	}
+	return h.request(http.MethodPost, "/cases/"+caseID+"/measurements", body)
 }
 
 func (h *harness) rejectedCase(tag string) (string, error) {

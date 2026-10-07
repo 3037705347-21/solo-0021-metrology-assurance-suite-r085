@@ -55,16 +55,8 @@ func (s Snapshot) Case(id string) (domain.VerificationCase, bool) {
 	return item, ok
 }
 
-func (s Snapshot) LabOfCase(caseID string) (string, bool) {
-	item, ok := s.cases[caseID]
-	if !ok {
-		return "", false
-	}
-	return item.Lab, true
-}
-
 func (s Snapshot) Measurements(caseID string) []domain.Measurement {
-	return append([]domain.Measurement(nil), s.measurements[caseID]...)
+	return append([]domain.Measurement{}, s.measurements[caseID]...)
 }
 
 func (s Snapshot) Seal(caseID string) (domain.EvidenceSeal, bool) {
@@ -73,7 +65,7 @@ func (s Snapshot) Seal(caseID string) (domain.EvidenceSeal, bool) {
 }
 
 func (s Snapshot) Events(caseID string) []domain.AuditEvent {
-	var result []domain.AuditEvent
+	result := make([]domain.AuditEvent, 0)
 	for _, item := range s.events {
 		if item.CaseID == caseID {
 			result = append(result, item)
@@ -147,14 +139,6 @@ func (m *Mutation) Case(id string) (domain.VerificationCase, bool) {
 	return item, ok
 }
 
-func (m *Mutation) LabOfCase(caseID string) (string, bool) {
-	item, ok := m.cases[caseID]
-	if !ok {
-		return "", false
-	}
-	return item.Lab, true
-}
-
 func (m *Mutation) PutCase(item domain.VerificationCase) error {
 	if _, exists := m.cases[item.ID]; exists {
 		return fmt.Errorf("%w: case %s", domain.ErrStateConflict, item.ID)
@@ -189,7 +173,7 @@ func (m *Mutation) AppendMeasurement(item domain.Measurement) error {
 }
 
 func (m *Mutation) Measurements(caseID string) []domain.Measurement {
-	return append([]domain.Measurement(nil), m.measurements[caseID]...)
+	return append([]domain.Measurement{}, m.measurements[caseID]...)
 }
 
 func (m *Mutation) Seal(caseID string) (domain.EvidenceSeal, bool) {
@@ -210,7 +194,7 @@ func (m *Mutation) AppendEvent(item domain.AuditEvent) {
 }
 
 func (m *Mutation) Events(caseID string) []domain.AuditEvent {
-	var result []domain.AuditEvent
+	result := make([]domain.AuditEvent, 0)
 	for _, item := range m.events {
 		if item.CaseID == caseID {
 			result = append(result, item)

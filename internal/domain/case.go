@@ -72,8 +72,24 @@ func (c VerificationCase) IsUnfinished() bool {
 }
 
 func (c VerificationCase) OwnedBy(lab string) bool {
-	requested := NormalizeLab(lab)
-	return requested == "" || requested == NormalizeLab(c.Lab)
+	return NormalizeLab(lab) == NormalizeLab(c.Lab)
+}
+
+// TransferLab reassigns an unfinished case to the laboratory that now owns
+// its device. It only applies to cases still being worked: sealed cases are
+// historical facts and keep their original laboratory.
+func (c *VerificationCase) TransferLab(lab string, at time.Time) error {
+	if c.State == CaseSealed {
+		return fmt.Errorf("%w: a sealed case keeps its original laboratory", ErrStateConflict)
+	}
+	target := NormalizeLab(lab)
+	if target == "" {
+		return fmt.Errorf("%w: target laboratory is required", ErrInvalidInput)
+	}
+	c.Lab = target
+	c.Version++
+	c.UpdatedAt = at.UTC()
+	return nil
 }
 
 func (c *VerificationCase) RecordMeasurement(accepted bool, at time.Time) error {

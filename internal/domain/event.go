@@ -8,6 +8,7 @@ import (
 
 type AuditEvent struct {
 	ID          string    `json:"id"`
+	Lab         string    `json:"lab"`
 	SubjectType string    `json:"subject_type"`
 	SubjectID   string    `json:"subject_id"`
 	CaseID      string    `json:"case_id,omitempty"`
@@ -17,9 +18,10 @@ type AuditEvent struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
-func NewAuditEvent(id, subjectType, subjectID, caseID, kind, actor, detail string, at time.Time) (AuditEvent, error) {
+func NewAuditEvent(id, lab, subjectType, subjectID, caseID, kind, actor, detail string, at time.Time) (AuditEvent, error) {
 	item := AuditEvent{
 		ID:          strings.TrimSpace(id),
+		Lab:         NormalizeLab(lab),
 		SubjectType: strings.TrimSpace(subjectType),
 		SubjectID:   strings.TrimSpace(subjectID),
 		CaseID:      strings.TrimSpace(caseID),
@@ -35,7 +37,7 @@ func NewAuditEvent(id, subjectType, subjectID, caseID, kind, actor, detail strin
 }
 
 func (e AuditEvent) Validate() error {
-	if e.ID == "" || e.SubjectType == "" || e.SubjectID == "" || e.Kind == "" || e.Actor == "" || e.Detail == "" {
+	if e.ID == "" || e.Lab == "" || e.SubjectType == "" || e.SubjectID == "" || e.Kind == "" || e.Actor == "" || e.Detail == "" {
 		return fmt.Errorf("%w: audit event fields are required", ErrInvalidInput)
 	}
 	if e.CreatedAt.IsZero() {
